@@ -1,0 +1,451 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Rocket, Heart } from 'lucide-react';
+
+export default function SpaceDefender() {
+  const canvasRef = useRef(null);
+  const [gameState, setGameState] = useState('menu'); // menu, playing, gameover
+  const [score, setScore] = useState(0);
+  const [lives, setLives] = useState(3);
+  const [highScore, setHighScore] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
+  const [level, setLevel] = useState(1);
+  
+  const gameRef = useRef({
+    ship: { x: 375, y: 500, width: 40, height: 40, speed: 7 },
+    bullets: [],
+    asteroids: [],
+    enemyShips: [],
+    enemyBullets: [],
+    keys: {},
+    animationId: null,
+    lastAsteroidTime: 0,
+    lastEnemyTime: 0,
+    touchLeft: false,
+    touchRight: false,
+    isTouching: false
+  });
+
+  useEffect(() => {
+    setIsMobile(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
+  }, []);
+
+  // Level progression
+  useEffect(() => {
+    if (score >= 500 && level < 5) {
+      setLevel(5);
+    } else if (score >= 400 && level < 4) {
+      setLevel(4);
+    } else if (score >= 300 && level < 3) {
+      setLevel(3);
+    } else if (score >= 150 && level < 2) {
+      setLevel(2);
+    }
+  }, [score, level]);
+
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const game = gameRef.current;
+
+    const shootBullet = () => {
+      const bullet = {
+        x: game.ship.x + game.ship.width / 2 - 2,
+        y: game.ship.y,
+        width: 4,
+        height: 15,
+        speed: 10
+      };
+      game.bullets.push(bullet);
+    };
+
+    const handleKeyDown = (e) => {
+      game.keys[e.key] = true;
+      if (e.key === ' ') {
+        e.preventDefault();
+        shootBullet();
+      }
+    };
+
+    const handleKeyUp = (e) => {
+      game.keys[e.key] = false;
+    };
+
+    const handleMouseDown = (e) => {
+      e.preventDefault();
+      shootBullet();
+    };
+
+    const handleTouchMove = (e) => {
+      if (!isMobile) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const touchX = (touch.clientX - rect.left) * scaleX;
+      
+      // Only update ship position, don't let it drift
+      const targetX = touchX - game.ship.width / 2;
+      game.ship.x = Math.max(0, Math.min(targetX, canvas.width - game.ship.width));
+    };
+
+    const handleTouchEnd = (e) => {
+      e.preventDefault();
+      // Reset any touch flags
+      game.touchLeft = false;
+      game.touchRight = false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    if (!isMobile) {
+      canvas.addEventListener('mousedown', handleMouseDown);
+    }
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+    canvas.addEventListener('touchend', handleTouchEnd);
+
+    const gameLoop = (timestamp) => {
+      // Clear canvas
+      ctx.fillStyle = '#000033';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw stars
+      for (let i = 0; i < 50; i++) {
+        const x = (i * 37) % canvas.width;
+        const y = (i * 67 + timestamp * 0.02) % canvas.height;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, y, 2, 2);
+      }
+
+      // Update ship position
+      if ((game.keys['ArrowLeft'] || game.keys['a'] || game.keys['A']) && game.ship.x > 0) {
+        game.ship.x -= game.ship.speed;
+      }
+      if ((game.keys['ArrowRight'] || game.keys['d'] || game.keys['D']) && game.ship.x < canvas.width - game.ship.width) {
+        game.ship.x += game.ship.speed;
+      }
+      // Note: Touch controls update ship position directly in handleTouchMove, not here
+
+      // Draw ship
+      ctx.fillStyle = '#00ffff';
+      ctx.beginPath();
+      ctx.moveTo(game.ship.x + game.ship.width / 2, game.ship.y);
+      ctx.lineTo(game.ship.x, game.ship.y + game.ship.height);
+      ctx.lineTo(game.ship.x + game.ship.width, game.ship.y + game.ship.height);
+      ctx.closePath();
+      ctx.fill();
+
+      // Update and draw bullets
+      game.bullets = game.bullets.filter(bullet => {
+        bullet.y -= bullet.speed;
+        ctx.fillStyle = '#ffff00';
+        ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+        return bullet.y > 0;
+      });
+
+      // Spawn asteroids - frequency and difficulty increase with level
+      const asteroidSpawnRate = Math.max(500, 1000 - (level * 100));
+      if (timestamp - game.lastAsteroidTime > asteroidSpawnRate) {
+        game.lastAsteroidTime = timestamp;
+        const size = 20 + Math.random() * 40;
+        const baseSpeed = 1.5 + (level * 0.3);
+        const speed = baseSpeed + Math.random() * (2 + level * 0.2);
+        const points = Math.random() < 0.3 ? 25 : Math.random() < 0.6 ? 15 : 10;
+        const asteroid = {
+          x: Math.random() * (canvas.width - size),
+          y: -size,
+          width: size,
+          height: size,
+          speed: speed,
+          rotation: Math.random() * Math.PI * 2,
+          points: points
+        };
+        game.asteroids.push(asteroid);
+      }
+
+      // Spawn enemy ships - only from level 3 onwards, frequency increases with level
+      if (level >= 3) {
+        const enemySpawnRate = Math.max(2000, 4000 - (level * 400));
+        if (timestamp - game.lastEnemyTime > enemySpawnRate) {
+          game.lastEnemyTime = timestamp;
+          const enemyShip = {
+            x: Math.random() * (canvas.width - 40),
+            y: -40,
+            width: 40,
+            height: 30,
+            speed: 1 + Math.random() * (1 + level * 0.2),
+            lastShot: timestamp,
+            health: level >= 4 ? 3 : 2,
+            shootRate: Math.max(1000, 1500 - (level * 100))
+          };
+          game.enemyShips.push(enemyShip);
+        }
+      }
+
+      // Update and draw enemy ships
+      game.enemyShips = game.enemyShips.filter(enemy => {
+        enemy.y += enemy.speed;
+
+        // Enemy shooting with variable rate
+        if (timestamp - enemy.lastShot > enemy.shootRate) {
+          enemy.lastShot = timestamp;
+          const enemyBullet = {
+            x: enemy.x + enemy.width / 2 - 2,
+            y: enemy.y + enemy.height,
+            width: 4,
+            height: 12,
+            speed: 5 + level * 0.3
+          };
+          game.enemyBullets.push(enemyBullet);
+        }
+
+        // Draw enemy ship
+        ctx.fillStyle = '#ff0066';
+        ctx.beginPath();
+        ctx.moveTo(enemy.x + enemy.width / 2, enemy.y + enemy.height);
+        ctx.lineTo(enemy.x, enemy.y);
+        ctx.lineTo(enemy.x + enemy.width, enemy.y);
+        ctx.closePath();
+        ctx.fill();
+
+        // Draw enemy ship body
+        ctx.fillStyle = '#cc0044';
+        ctx.fillRect(enemy.x + 10, enemy.y + 5, enemy.width - 20, 10);
+
+        // Check collision with player ship
+        if (enemy.y + enemy.height > game.ship.y &&
+            enemy.x < game.ship.x + game.ship.width &&
+            enemy.x + enemy.width > game.ship.x) {
+          setLives(prev => {
+            const newLives = prev - 1;
+            if (newLives <= 0) {
+              setGameState('gameover');
+              setHighScore(prev => Math.max(prev, score));
+            }
+            return newLives;
+          });
+          return false;
+        }
+
+        return enemy.y < canvas.height && enemy.health > 0;
+      });
+
+      // Update and draw enemy bullets
+      game.enemyBullets = game.enemyBullets.filter(bullet => {
+        bullet.y += bullet.speed;
+        ctx.fillStyle = '#ff00ff';
+        ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+
+        // Check collision with player
+        if (bullet.y + bullet.height > game.ship.y &&
+            bullet.x < game.ship.x + game.ship.width &&
+            bullet.x + bullet.width > game.ship.x &&
+            bullet.y < game.ship.y + game.ship.height) {
+          setLives(prev => {
+            const newLives = prev - 1;
+            if (newLives <= 0) {
+              setGameState('gameover');
+              setHighScore(prev => Math.max(prev, score));
+            }
+            return newLives;
+          });
+          return false;
+        }
+
+        return bullet.y < canvas.height;
+      });
+      game.asteroids = game.asteroids.filter(asteroid => {
+        asteroid.y += asteroid.speed;
+        asteroid.rotation += 0.02;
+
+        // Draw asteroid with color based on points
+        ctx.save();
+        ctx.translate(asteroid.x + asteroid.width / 2, asteroid.y + asteroid.height / 2);
+        ctx.rotate(asteroid.rotation);
+        
+        // Different colors for different point values
+        if (asteroid.points === 25) {
+          ctx.fillStyle = '#ffd700'; // Gold for high value
+        } else if (asteroid.points === 15) {
+          ctx.fillStyle = '#ff8c00'; // Orange for medium value
+        } else {
+          ctx.fillStyle = '#ff6600'; // Red for low value
+        }
+        
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const angle = (i / 8) * Math.PI * 2;
+          const radius = asteroid.width / 2 * (0.8 + Math.random() * 0.4);
+          const x = Math.cos(angle) * radius;
+          const y = Math.sin(angle) * radius;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        // Check collision with ship
+        if (asteroid.y + asteroid.height > game.ship.y &&
+            asteroid.x < game.ship.x + game.ship.width &&
+            asteroid.x + asteroid.width > game.ship.x) {
+          setLives(prev => {
+            const newLives = prev - 1;
+            if (newLives <= 0) {
+              setGameState('gameover');
+              setHighScore(prev => Math.max(prev, score));
+            }
+            return newLives;
+          });
+          return false;
+        }
+
+        return asteroid.y < canvas.height;
+      });
+
+      // Check bullet-asteroid collisions
+      game.bullets.forEach((bullet, bIndex) => {
+        game.asteroids.forEach((asteroid, aIndex) => {
+          if (bullet.x < asteroid.x + asteroid.width &&
+              bullet.x + bullet.width > asteroid.x &&
+              bullet.y < asteroid.y + asteroid.height &&
+              bullet.y + bullet.height > asteroid.y) {
+            game.bullets.splice(bIndex, 1);
+            game.asteroids.splice(aIndex, 1);
+            setScore(prev => prev + asteroid.points);
+          }
+        });
+
+        // Check bullet-enemy collisions
+        game.enemyShips.forEach((enemy, eIndex) => {
+          if (bullet.x < enemy.x + enemy.width &&
+              bullet.x + bullet.width > enemy.x &&
+              bullet.y < enemy.y + enemy.height &&
+              bullet.y + bullet.height > enemy.y) {
+            game.bullets.splice(bIndex, 1);
+            enemy.health--;
+            if (enemy.health <= 0) {
+              game.enemyShips.splice(eIndex, 1);
+              setScore(prev => prev + 50);
+            }
+          }
+        });
+      });
+
+      game.animationId = requestAnimationFrame(gameLoop);
+    };
+
+    game.animationId = requestAnimationFrame(gameLoop);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      if (!isMobile) {
+        canvas.removeEventListener('mousedown', handleMouseDown);
+      }
+      canvas.removeEventListener('touchmove', handleTouchMove);
+      canvas.removeEventListener('touchend', handleTouchEnd);
+      if (game.animationId) {
+        cancelAnimationFrame(game.animationId);
+      }
+    };
+  }, [gameState, score, isMobile]);
+
+  const startGame = () => {
+    setGameState('playing');
+    setScore(0);
+    setLives(3);
+    setLevel(1);
+    gameRef.current.bullets = [];
+    gameRef.current.asteroids = [];
+    gameRef.current.enemyShips = [];
+    gameRef.current.enemyBullets = [];
+    gameRef.current.ship.x = 375;
+    gameRef.current.keys = {}; // Clear all key states
+    gameRef.current.touchLeft = false;
+    gameRef.current.touchRight = false;
+    gameRef.current.isTouching = false;
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-purple-900 to-black p-2">
+      <div className="mb-2 flex items-center gap-4 text-white text-sm md:text-base md:gap-8 md:mb-4">
+        <div className="text-lg md:text-2xl font-bold">Score: {score}</div>
+        <div className="text-base md:text-xl font-bold text-cyan-400">Level {level}</div>
+        <div className="flex items-center gap-1 md:gap-2">
+          {Array.from({ length: lives }).map((_, i) => (
+            <Heart key={i} className="text-red-500" fill="currentColor" size={20} />
+          ))}
+        </div>
+        <div className="text-base md:text-xl">High: {highScore}</div>
+      </div>
+
+      {gameState === 'menu' && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80 z-10">
+          <div className="text-center text-white">
+            <Rocket className="mx-auto mb-4" size={64} />
+            <h1 className="text-5xl font-bold mb-4">Space Defender</h1>
+            <p className="text-xl mb-2">Arrow Keys or A/D to move</p>
+            <p className="text-xl mb-2">SPACE or Mouse Click to shoot</p>
+            {isMobile && <p className="text-lg mb-2 text-cyan-400">Drag on screen to move • Tap button to shoot</p>}
+            <button
+              onClick={startGame}
+              className="bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-3 px-8 rounded-lg text-xl mt-4"
+            >
+              Start Game
+            </button>
+          </div>
+        </div>
+      )}
+
+      {gameState === 'gameover' && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80 z-10">
+          <div className="text-center text-white">
+            <h1 className="text-5xl font-bold mb-4 text-red-500">Game Over</h1>
+            <p className="text-3xl mb-2">Final Score: {score}</p>
+            <p className="text-2xl mb-6">High Score: {highScore}</p>
+            <button
+              onClick={startGame}
+              className="bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-3 px-8 rounded-lg text-xl"
+            >
+              Play Again
+            </button>
+          </div>
+        </div>
+      )}
+
+      <canvas
+        ref={canvasRef}
+        width={800}
+        height={600}
+        className="border-4 border-cyan-500 rounded-lg shadow-2xl w-full max-w-full h-auto touch-none"
+        style={{ maxHeight: isMobile ? 'calc(100vh - 180px)' : '600px' }}
+      />
+
+      {isMobile && gameState === 'playing' && (
+        <button
+          onTouchStart={(e) => {
+            e.preventDefault();
+            const bullet = {
+              x: gameRef.current.ship.x + gameRef.current.ship.width / 2 - 2,
+              y: gameRef.current.ship.y,
+              width: 4,
+              height: 15,
+              speed: 10
+            };
+            gameRef.current.bullets.push(bullet);
+          }}
+          className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-red-500 bg-opacity-80 text-white font-bold py-4 px-10 rounded-full text-xl active:bg-red-600 shadow-2xl border-2 border-red-300"
+        >
+          🚀 FIRE
+        </button>
+      )}
+
+      <div className="mt-2 text-center text-gray-300 text-xs md:text-sm">
+        <p>Defend Earth from the asteroid storm!</p>
+        <p>Destroy asteroids before they reach your ship</p>
+      </div>
+    </div>
+  );
+}
